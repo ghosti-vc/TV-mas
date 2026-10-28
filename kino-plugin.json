@@ -1,10 +1,10 @@
 {
   "id": "tv-mas",
   "name": "TV mas",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "apiVersion": 3,
   "entry": "plugin.js",
-  "icon": "icon.png",
+  "icon": "",
   "description": "Miles de canales de TV en vivo (noticias, deportes, películas y más) en español y otros idiomas.",
   "hosts": [
     "d368vp0qqzvkid.cloudfront.net",
