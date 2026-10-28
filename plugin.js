@@ -23,6 +23,11 @@ function decode(s) {
   return String(s || "")
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
     .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&nbsp;/g, " ")
+    .replace(/&raquo;/g, "»")
+    .replace(/&laquo;/g, "«")
+    .replace(/&rsaquo;/g, "›")
+    .replace(/&lsaquo;/g, "‹")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
@@ -62,6 +67,12 @@ async function getHtml(url) {
   return typeof t === "string" ? t : String(t || "");
 }
 
+// Texto del primer encabezado (h1 a h6) dentro de un pedazo de HTML.
+function headingText(html) {
+  const m = /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/i.exec(html || "");
+  return m ? stripTags(m[1]) : "";
+}
+
 function parseCategories(html) {
   const out = [];
   const seen = new Set();
@@ -71,7 +82,7 @@ function parseCategories(html) {
     const slug = m[3];
     if (seen.has(slug) || !ID_OK.test("c-" + slug)) continue;
     const tag = m[1] + " " + m[4];
-    let title = attr(tag, "title") || stripTags(m[5]);
+    let title = attr(tag, "title") || headingText(m[5]) || stripTags(m[5]);
     if (!title) {
       const img = /<img\b[^>]*>/i.exec(m[5]);
       title = img ? attr(img[0], "alt") : "";
@@ -83,6 +94,8 @@ function parseCategories(html) {
   return out;
 }
 
+// En la página de una categoría cada canal es: <a href=".../tv-en-vivo/slug">
+//   <img src="logo"> <h4>Nombre</h4> <div><img class="flag"> País - Ciudad</div> ... </a>
 function parseChannels(html, pageUrl) {
   const out = [];
   const seen = new Set();
@@ -93,10 +106,19 @@ function parseChannels(html, pageUrl) {
     if (seen.has(slug) || !ID_OK.test(slug)) continue;
     const tag = m[1] + " " + m[4];
     const inner = m[5];
-    const imgTag = (/<img\b[^>]*>/i.exec(inner) || [""])[0];
-    let title = attr(tag, "title") || attr(imgTag, "alt") || attr(imgTag, "title") || stripTags(inner);
+    // El logo es la primera imagen que no es la banderita del país.
+    let logoTag = "";
+    const imgRe = /<img\b[^>]*>/gi;
+    let im;
+    while ((im = imgRe.exec(inner))) {
+      if (!/class=["'][^"']*\bflag\b/i.test(im[0])) {
+        logoTag = im[0];
+        break;
+      }
+    }
+    let title = headingText(inner) || attr(tag, "title") || attr(logoTag, "alt") || attr(logoTag, "title");
     if (!title) title = slug.replace(/-/g, " ");
-    let logo = attr(imgTag, "data-src") || attr(imgTag, "src");
+    let logo = attr(logoTag, "data-src") || attr(logoTag, "src");
     logo = logo ? absolute(logo, pageUrl) : "";
     seen.add(slug);
     const item = { id: slug, title: title.slice(0, 120), ref: slug };
@@ -106,30 +128,49 @@ function parseChannels(html, pageUrl) {
   return out;
 }
 
+// Número de página que indica una dirección (?pagina=2, ?page=2, ?p=2, /pagina/2). Sin número = 1.
+function pageNum(url) {
+  let m = /[?&](?:pagina|page|pag|p)=(\d+)/i.exec(url);
+  if (!m) m = /\/(?:pagina|page|pag|p)\/(\d+)\/?(?:[?#]|$)/i.exec(url);
+  return m ? Number(m[1]) : 1;
+}
+
+function pathOf(url) {
+  return url.replace(/[?#].*$/, "").replace(/\/(?:pagina|page|pag|p)\/\d+\/?$/i, "").replace(/\/+$/, "");
+}
+
 function findNext(html, pageUrl) {
-  let href = "";
+  const cur = pageNum(pageUrl);
+  const base = pathOf(pageUrl);
+  const tried = [];
+
+  // 1) Marcado rel="next".
   let m = /<link\b[^>]*rel=["']next["'][^>]*>/i.exec(html);
-  if (m) href = attr(m[0], "href");
-  if (!href) {
-    m = /<a\b[^>]*rel=["']next["'][^>]*>/i.exec(html);
-    if (m) href = attr(m[0], "href");
-  }
-  if (!href) {
-    const re = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
-    let a;
-    while ((a = re.exec(html))) {
-      const text = stripTags(a[2]);
-      if (/^(siguiente|next|»|›|>)$/i.test(text) || /siguiente/i.test(attr(a[1], "aria-label"))) {
-        href = attr(a[1], "href");
-        if (href && href !== "#") break;
-        href = "";
-      }
+  if (m) tried.push(attr(m[0], "href"));
+  m = /<a\b[^>]*rel=["']next["'][^>]*>/i.exec(html);
+  if (m) tried.push(attr(m[0], "href"));
+
+  // 2) Enlaces de la misma categoría cuyo número de página es el siguiente.
+  const re = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let a;
+  while ((a = re.exec(html))) {
+    const href = attr(a[1], "href");
+    if (!href || href === "#") continue;
+    const abs = absolute(href, pageUrl);
+    if (!abs || !isOurHost(abs)) continue;
+    if (pathOf(abs) === base && pageNum(abs) === cur + 1) tried.push(href);
+    const text = stripTags(a[2]);
+    if (/^(siguiente|next|»|›|>|>>)$/i.test(text) || /siguiente|next/i.test(attr(a[1], "aria-label"))) {
+      tried.push(href);
     }
   }
-  if (!href) return undefined;
-  const next = absolute(href, pageUrl);
-  if (!next || next === pageUrl || !isOurHost(next) || next.length > 2000) return undefined;
-  return next;
+
+  for (const href of tried) {
+    if (!href || href === "#") continue;
+    const next = absolute(href, pageUrl);
+    if (next && next !== pageUrl && isOurHost(next) && next.length <= 2000 && pageNum(next) !== cur) return next;
+  }
+  return undefined;
 }
 
 // ---------- funciones que llama Kino ----------
