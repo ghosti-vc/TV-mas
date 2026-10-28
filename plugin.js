@@ -6,9 +6,24 @@ const BASE = "https://www.cxtvenvivo.com";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const ID_OK = /^[A-Za-z0-9._~-]{1,128}$/;
 
-// Categorías propias: cada una lee una lista de la página (búsqueda del sitio).
+// Categorías propias: cada una junta los resultados de varias búsquedas del sitio.
+// La búsqueda "Telemundo" sola muestra pocos canales, así que se prueban también
+// ciudades y estados donde hay estaciones.
+const CIUDADES_TELEMUNDO = [
+  "Houston", "Chicago", "Arizona", "Atlanta", "Las Vegas", "Denver", "San Antonio",
+  "Washington", "Tampa", "Orlando", "Sacramento", "Fresno", "Utah", "Colorado",
+  "Connecticut", "Philadelphia", "Los Angeles", "Dallas", "New York", "Puerto Rico",
+  "Internacional", "Streaming", "Acción", "Noticias",
+];
+
 const ESPECIALES = [
-  { id: "telemundo", title: "Telemundo", country: "US", url: BASE + "/busqueda/?query=Telemundo" },
+  {
+    id: "telemundo",
+    title: "Telemundo",
+    country: "US",
+    filtro: /telemundo/i,
+    queries: ["Telemundo"].concat(CIUDADES_TELEMUNDO.map((c) => "Telemundo " + c)),
+  },
 ];
 
 // Canal que ya sabemos que funciona: siempre aparece, aunque falle la página.
@@ -178,6 +193,44 @@ function findNext(html, pageUrl) {
   return undefined;
 }
 
+async function leerBusqueda(url) {
+  try {
+    const r = await kino.fetch(url);
+    if (!r.ok) return [];
+    let t = typeof r.text === "function" ? r.text() : r.text;
+    t = await t;
+    return parseChannels(typeof t === "string" ? t : String(t || ""), url);
+  } catch (e) {
+    return [];
+  }
+}
+
+// Junta los resultados de todas las búsquedas de una categoría especial (sin repetir canales).
+async function listarBusquedas(especial, categoryId) {
+  const base = BASE + "/busqueda/?query=";
+  const urls = especial.queries.map((q) => base + encodeURIComponent(q));
+  const q0 = encodeURIComponent(especial.queries[0]);
+  // El sitio muestra 12 resultados y un botón "Cargar más": se prueban nombres comunes de página.
+  for (const p of ["pagina", "page", "p"]) urls.push(base + q0 + "&" + p + "=2");
+
+  const t0 = Date.now();
+  const porId = new Map();
+  for (let i = 0; i < urls.length; i += 6) {
+    if (Date.now() - t0 > 13000) break;
+    const grupo = await Promise.all(urls.slice(i, i + 6).map(leerBusqueda));
+    for (const lista of grupo) {
+      for (const c of lista) {
+        if (!porId.has(c.id) && (!especial.filtro || especial.filtro.test(c.title))) porId.set(c.id, c);
+      }
+    }
+  }
+  const items = Array.from(porId.values())
+    .sort((x, y) => (x.title < y.title ? -1 : x.title > y.title ? 1 : 0))
+    .map((c) => ({ ...c, categoryId }));
+  kino.log("busquedas " + categoryId + ": " + items.length + " canales");
+  return items;
+}
+
 // ---------- funciones que llama Kino ----------
 
 // Kino pide home o search; este plugin solo tiene canales.
@@ -218,9 +271,13 @@ export async function liveChannels({ categoryId, cursor }) {
     };
   }
   const especial = ESPECIALES.find((e) => e.id === categoryId);
+  if (especial) {
+    const items = await listarBusquedas(especial, categoryId);
+    if (items.length) return { items };
+    return { items: [{ id: "aviso-vacio", title: "Aviso: la búsqueda no devolvió canales", categoryId, ref: "aviso-vacio" }] };
+  }
   let inicio;
-  if (especial) inicio = especial.url;
-  else if (typeof categoryId === "string" && categoryId.indexOf("c-") === 0) {
+  if (typeof categoryId === "string" && categoryId.indexOf("c-") === 0) {
     inicio = BASE + "/tv/categorias/" + encodeURIComponent(categoryId.slice(2));
   } else return { items: [] };
   const url = cursor && isOurHost(cursor) ? cursor : inicio;
