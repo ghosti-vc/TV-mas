@@ -6,6 +6,11 @@ const BASE = "https://www.cxtvenvivo.com";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const ID_OK = /^[A-Za-z0-9._~-]{1,128}$/;
 
+// Categorías propias: cada una lee una lista de la página (búsqueda del sitio).
+const ESPECIALES = [
+  { id: "telemundo", title: "Telemundo", country: "US", url: BASE + "/busqueda/?query=Telemundo" },
+];
+
 // Canal que ya sabemos que funciona: siempre aparece, aunque falle la página.
 const DESTACADOS = [
   {
@@ -184,6 +189,7 @@ export async function home() {
 export async function liveCategories() {
   await null;
   const cats = [{ id: "destacados", title: "Destacados", country: "US" }];
+  for (const e of ESPECIALES) cats.push({ id: e.id, title: e.title, country: e.country });
   try {
     const html = await getHtml(BASE + "/tv/categorias");
     for (const c of parseCategories(html)) {
@@ -211,9 +217,13 @@ export async function liveChannels({ categoryId, cursor }) {
       })),
     };
   }
-  if (typeof categoryId !== "string" || categoryId.indexOf("c-") !== 0) return { items: [] };
-  const slug = categoryId.slice(2);
-  const url = cursor && isOurHost(cursor) ? cursor : BASE + "/tv/categorias/" + encodeURIComponent(slug);
+  const especial = ESPECIALES.find((e) => e.id === categoryId);
+  let inicio;
+  if (especial) inicio = especial.url;
+  else if (typeof categoryId === "string" && categoryId.indexOf("c-") === 0) {
+    inicio = BASE + "/tv/categorias/" + encodeURIComponent(categoryId.slice(2));
+  } else return { items: [] };
+  const url = cursor && isOurHost(cursor) ? cursor : inicio;
 
   const r = await kino.fetch(url);
   let html = typeof r.text === "function" ? r.text() : r.text;
