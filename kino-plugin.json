@@ -1,7 +1,7 @@
 {
   "id": "tv-mas",
   "name": "TV mas",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "apiVersion": 3,
   "entry": "plugin.js",
   "icon": "",
