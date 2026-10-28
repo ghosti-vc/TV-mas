@@ -214,8 +214,25 @@ export async function liveChannels({ categoryId, cursor }) {
   if (typeof categoryId !== "string" || categoryId.indexOf("c-") !== 0) return { items: [] };
   const slug = categoryId.slice(2);
   const url = cursor && isOurHost(cursor) ? cursor : BASE + "/tv/categorias/" + encodeURIComponent(slug);
-  const html = await getHtml(url);
-  const items = parseChannels(html, url).map((c) => ({ ...c, categoryId }));
+
+  const r = await kino.fetch(url);
+  let html = typeof r.text === "function" ? r.text() : r.text;
+  html = await html;
+  html = typeof html === "string" ? html : String(html || "");
+  const items = r.ok ? parseChannels(html, url).map((c) => ({ ...c, categoryId })) : [];
+
+  if (!items.length) {
+    // Aviso temporal para saber qué pasó (se quita cuando todo funcione).
+    const inicio = html.replace(/\s+/g, " ").slice(0, 70);
+    kino.log("sin canales en " + url + " estado=" + r.status + " largo=" + html.length);
+    return {
+      items: [
+        { id: "aviso-estado", title: "Aviso: sin canales (estado " + r.status + ", " + html.length + " caracteres)", categoryId, ref: "aviso-estado" },
+        { id: "aviso-inicio", title: "Inicio: " + (inicio || "(vacío)"), categoryId, ref: "aviso-inicio" },
+      ],
+    };
+  }
+
   const next = findNext(html, url);
   return next ? { items, next } : { items };
 }
